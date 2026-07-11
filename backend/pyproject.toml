@@ -1,0 +1,21 @@
+[project]
+name = "wishlist-backend"
+version = "0.1.0"
+description = "Wishlist API — FastAPI + SQLAlchemy 2.0 (async) + Alembic"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+# aiosqlite is only for local smoke tests without Postgres; real DB is Supabase Postgres
+dev = [
+    "aiosqlite>=0.20",
+]

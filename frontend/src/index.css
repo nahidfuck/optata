@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+/* Design tokens — tech-spec §6. The chrome is a stage, not an actor. */
+@theme {
+  --color-paper: #e4e3de;
+  --color-paper-deep: #d5d4ce;
+  --color-ink: #131311;
+  --color-ink-soft: #6b6a64;
+  --color-electric: #2e22e0;
+  --color-danger: #c7300b;
+
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", sans-serif;
+  --font-body: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", monospace;
+
+  --radius-tag: 18px;
+
+  /* Offset shadows, no blur — the tag vernacular */
+  --shadow-tag: 5px 5px 0 var(--color-ink);
+  --shadow-tag-lift: 8px 8px 0 var(--color-ink);
+}
+
+@layer base {
+  body {
+    @apply bg-paper font-body text-ink;
+  }
+}

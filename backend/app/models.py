@@ -95,12 +95,18 @@ class Reservation(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    item_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("items.id", ondelete="CASCADE"), nullable=False
+    # NULL = tombstone: the owner deleted the item, the reserver still sees
+    # "This item was removed" in /reservations (migration c5ea05a99ba6)
+    item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("items.id", ondelete="SET NULL")
     )
     reserver_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    # Captured at reserve time; rendered only when item_id IS NULL — the
+    # tombstone shows the promise as it was made, not a stale join.
+    item_title_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    owner_username_snapshot: Mapped[str] = mapped_column(CITEXT, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

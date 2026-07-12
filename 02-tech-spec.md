@@ -121,7 +121,7 @@ PRIMARY KEY (item_id, session_hash)
   - `/auth/login` — 10/хв на IP
   - `/auth/register` — 5/год на IP
   - `/auth/forgot-password` — 3/год на IP
-  - `POST /items` — 30/год на юзера
+  - `POST /items` — 60/год на юзера (більше за ліміт 40, інакше 409 недосяжний і новий юзер ловить 429 на 31-му айтемі; задача ліміту — тільки обмежити churn create/delete/create)
 
 ---
 

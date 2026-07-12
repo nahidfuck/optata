@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.db import engine, get_db
 from app.logging_config import configure_logging
 from app.rate_limit import client_ip, limiter
-from app.routers import auth, users
+from app.routers import auth, items, reservations, users
 
 configure_logging()
 log = structlog.get_logger()
@@ -57,6 +57,8 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=get_settings().forwarde
 
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(items.router)
+app.include_router(reservations.router)
 
 
 @app.get("/debug/whoami")

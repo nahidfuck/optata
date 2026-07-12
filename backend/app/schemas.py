@@ -139,3 +139,49 @@ class ProfileGuestOut(BaseModel):
     avatar_url: str | None
     is_owner: bool = False
     items: list[ItemGuestOut]
+
+
+# --- items: mutations ---
+
+
+class ReorderIn(BaseModel):
+    ordered_ids: list[uuid.UUID]
+
+
+class ViewsIn(BaseModel):
+    item_ids: list[uuid.UUID]
+
+
+# --- reservations ---
+
+
+class ReservedItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    title: str
+    image_url: str
+    accent_color: str
+    link: str | None
+    price: Decimal | None
+    currency: str | None
+    owner_username: str
+
+
+class TombstoneOut(BaseModel):
+    """Snapshot taken at reserve time — what was promised, and to whom."""
+
+    title: str
+    owner_username: str
+
+
+class ReservationOut(BaseModel):
+    id: uuid.UUID  # needed to dismiss via DELETE /reservations/{id}
+    # item is None → the owner deleted it; tombstone carries the snapshot
+    item: ReservedItemOut | None
+    tombstone: TombstoneOut | None
+    created_at: datetime
+
+
+class ReservationCreatedOut(BaseModel):
+    item_id: uuid.UUID

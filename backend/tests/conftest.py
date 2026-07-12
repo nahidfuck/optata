@@ -33,6 +33,37 @@ def disable_rate_limits() -> AsyncIterator[None]:
     limiter.enabled = True
 
 
+class StorageRecorder:
+    """What the app THINKS it stored/deleted. Tests never touch real storage."""
+
+    def __init__(self) -> None:
+        self.uploads: dict[str, bytes] = {}
+        self.deletes: list[str] = []
+        self.fail_uploads = False
+        self.fail_deletes = False
+
+
+@pytest.fixture(autouse=True)
+def fake_storage(monkeypatch: pytest.MonkeyPatch) -> StorageRecorder:
+    from app.storage import Storage, StorageError
+
+    recorder = StorageRecorder()
+
+    async def fake_upload(self: Storage, path: str, content: bytes) -> None:
+        if recorder.fail_uploads:
+            raise StorageError
+        recorder.uploads[path] = content
+
+    async def fake_delete(self: Storage, path: str) -> None:
+        if recorder.fail_deletes:
+            return  # real impl logs and swallows — same observable behavior
+        recorder.deletes.append(path)
+
+    monkeypatch.setattr(Storage, "upload_item_image", fake_upload)
+    monkeypatch.setattr(Storage, "delete_item_image", fake_delete)
+    return recorder
+
+
 @pytest.fixture
 async def db_connection() -> AsyncIterator[AsyncConnection]:
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)

@@ -13,13 +13,29 @@ class Settings(BaseSettings):
     database_url: str
     jwt_secret: str
 
-    # Blank until Stage 2 (image pipeline) / Stage 1 (reset emails) need them.
     supabase_url: str = ""
-    supabase_service_key: str = ""
+    supabase_service_key: str = ""  # backend-only, never exposed to the client
+
     resend_api_key: str = ""
+    email_from: str = "onboarding@resend.dev"
 
     frontend_origin: str = "http://localhost:5173"
+
+    # Refresh-cookie flags come from config, not from environment branching.
+    # Local: false / lax / "". Prod: true / lax / .<domain>
+    cookie_secure: bool = False
+    cookie_samesite: str = "lax"
     cookie_domain: str = ""
+
+    # Socket peers allowed to set X-Forwarded-For (the reverse proxy in prod).
+    # Never "*" unless the platform provably strips client-supplied XFF —
+    # with "*" uvicorn's middleware takes the LEFTMOST (attacker-controlled)
+    # chain entry instead of the rightmost untrusted one.
+    forwarded_allow_ips: str = "127.0.0.1"
+
+    # GET /debug/whoami — proxy-resolution truth endpoint for the Stage 6
+    # audit on Render. Off everywhere by default.
+    debug_whoami: bool = False
 
 
 @lru_cache

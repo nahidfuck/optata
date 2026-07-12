@@ -361,6 +361,9 @@ Continue the wishlist app. Final stage: production readiness.
 2. HARDENING
    - Security headers: CSP, HSTS, X-Content-Type-Options, Referrer-Policy
    - Confirm rate limits are live in production
+   - Set FORWARDED_ALLOW_IPS for Render's proxy. Never "*" — with "*" uvicorn's
+     middleware takes the LEFTMOST (attacker-controlled) X-Forwarded-For entry.
+     Verify the value with audit item f) before trusting it.
    - Confirm the Supabase service key is never exposed to the client
    - Sentry (free tier) on both ends
 
@@ -374,6 +377,11 @@ Continue the wishlist app. Final stage: production readiness.
    d) Full flow on a mid-range Android at 360px: register, add 5 items, share the link,
       open it in a private window, shuffle, reserve.
    e) Turn on prefers-reduced-motion. The whole app remains usable.
+   f) Set DEBUG_WHOAMI=true on Render. From a phone on MOBILE DATA hit
+      GET /debug/whoami: resolved_client_host must equal the phone's real
+      public IP (compare with a what-is-my-ip service). Then curl the same
+      URL with a spoofed X-Forwarded-For — the resolved host must NOT become
+      the spoofed value. Set DEBUG_WHOAMI=false when done.
 
 4. README: what it is, one screenshot, the stack, local setup, env vars, architecture
    decisions and why (write this one properly — it is what a recruiter actually reads).

@@ -12,10 +12,20 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "structlog>=24.4",
+    "passlib[argon2]>=1.7.4",
+    "pyjwt>=2.13.0",
+    "slowapi>=0.1.10",
+    "email-validator>=2.3.0",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]
-# aiosqlite is only for local smoke tests without Postgres; real DB is Supabase Postgres
 dev = [
-    "aiosqlite>=0.20",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

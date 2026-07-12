@@ -1,0 +1,157 @@
+import re
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import select
+
+from app.deps import CurrentUser, DbSession, OptionalUser
+from app.models import Item, Reservation, User
+from app.routers.auth import revoke_all_refresh_tokens
+from app.schemas import (
+    ItemGuestOut,
+    ItemOwnerOut,
+    PasswordChangeIn,
+    ProfileGuestOut,
+    ProfileOwnerOut,
+    USERNAME_RE,
+    UserPrivate,
+    UserPublic,
+    UserUpdateIn,
+    UsernameAvailability,
+)
+from app.security import hash_password, verify_password
+
+router = APIRouter(prefix="/users", tags=["users"])
+
+USERNAME_CHANGE_WINDOW = timedelta(days=30)
+
+
+@router.get("/check-username", response_model=UsernameAvailability)
+async def check_username(db: DbSession, username: str = Query()) -> UsernameAvailability:
+    candidate = username.strip().lower()
+    if not USERNAME_RE.fullmatch(candidate):
+        return UsernameAvailability(available=False)
+    taken = await db.scalar(select(User.id).where(User.username == candidate))
+    return UsernameAvailability(available=taken is None)
+
+
+@router.get("/search", response_model=list[UserPublic])
+async def search_users(db: DbSession, q: str = Query(default="")) -> list[UserPublic]:
+    # Usernames are [a-z0-9_], so strip everything else; escape _ (a LIKE wildcard)
+    sanitized = re.sub(r"[^a-z0-9_]", "", q.strip().lower())[:20]
+    if not sanitized:
+        return []
+    pattern = sanitized.replace("_", r"\_") + "%"
+    users = await db.scalars(
+        select(User).where(User.username.like(pattern, escape="\\")).order_by(User.username).limit(10)
+    )
+    return [UserPublic.model_validate(u) for u in users]
+
+
+@router.get("/me", include_in_schema=False)
+async def users_me_guard() -> None:
+    # /users/{username} must never swallow "me"
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+
+
+@router.get("/{username}", response_model=ProfileOwnerOut | ProfileGuestOut)
+async def get_profile(
+    username: str, db: DbSession, viewer: OptionalUser
+) -> ProfileOwnerOut | ProfileGuestOut:
+    user = await db.scalar(select(User).where(User.username == username.strip().lower()))
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+
+    items = (
+        await db.scalars(select(Item).where(Item.user_id == user.id).order_by(Item.order_index))
+    ).all()
+
+    is_owner = viewer is not None and viewer.id == user.id
+    profile_fields = {
+        "username": user.username,
+        "display_name": user.display_name,
+        "bio": user.bio,
+        "avatar_url": user.avatar_url,
+    }
+
+    if is_owner:
+        # Owner sees view_count and NEVER any reservation data — the guest
+        # fields do not exist on ItemOwnerOut at all (tech-spec §4.1).
+        return ProfileOwnerOut(
+            **profile_fields, items=[ItemOwnerOut.model_validate(i) for i in items]
+        )
+
+    item_ids = [i.id for i in items]
+    reserved_ids: set = set()
+    my_reserved_ids: set = set()
+    if item_ids:
+        reservations = (
+            await db.execute(
+                select(Reservation.item_id, Reservation.reserver_id).where(
+                    Reservation.item_id.in_(item_ids)
+                )
+            )
+        ).all()
+        reserved_ids = {r.item_id for r in reservations}
+        if viewer is not None:
+            my_reserved_ids = {r.item_id for r in reservations if r.reserver_id == viewer.id}
+
+    return ProfileGuestOut(
+        **profile_fields,
+        items=[
+            ItemGuestOut(
+                id=i.id,
+                title=i.title,
+                image_url=i.image_url,
+                accent_color=i.accent_color,
+                link=i.link,
+                price=i.price,
+                currency=i.currency,
+                note=i.note,
+                order_index=i.order_index,
+                is_reserved=i.id in reserved_ids,
+                reserved_by_me=i.id in my_reserved_ids,
+            )
+            for i in items
+        ],
+    )
+
+
+@router.patch("/me", response_model=UserPrivate)
+async def update_me(body: UserUpdateIn, db: DbSession, current_user: CurrentUser) -> UserPrivate:
+    fields_set = body.model_fields_set
+
+    if "display_name" in fields_set:
+        current_user.display_name = body.display_name
+    if "bio" in fields_set:
+        current_user.bio = body.bio
+
+    if "username" in fields_set and body.username is not None and body.username != current_user.username:
+        now = datetime.now(timezone.utc)
+        if current_user.username_changed_at is not None:
+            allowed_at = current_user.username_changed_at + USERNAME_CHANGE_WINDOW
+            if now < allowed_at:
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    f"You can change your username once every 30 days. "
+                    f"Next change available {allowed_at.date().isoformat()}.",
+                )
+        taken = await db.scalar(select(User.id).where(User.username == body.username))
+        if taken:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This username is taken.")
+        current_user.username = body.username
+        current_user.username_changed_at = now
+
+    await db.commit()
+    await db.refresh(current_user)
+    return UserPrivate.model_validate(current_user)
+
+
+@router.patch("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(body: PasswordChangeIn, db: DbSession, current_user: CurrentUser) -> None:
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect.")
+    current_user.password_hash = hash_password(body.new_password)
+    # Other sessions die; this one lives until its access token expires
+    await revoke_all_refresh_tokens(db, current_user.id)
+    await db.commit()

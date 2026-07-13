@@ -8,9 +8,11 @@ from app.deps import CurrentUser, DbSession, OptionalUser
 from app.models import Item, Reservation, User
 from app.routers.auth import revoke_all_refresh_tokens
 from app.schemas import (
+    ItemAnonymousOut,
     ItemGuestOut,
     ItemOwnerOut,
     PasswordChangeIn,
+    ProfileAnonymousOut,
     ProfileGuestOut,
     ProfileOwnerOut,
     USERNAME_RE,
@@ -54,10 +56,17 @@ async def users_me_guard() -> None:
     raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
 
 
-@router.get("/{username}", response_model=ProfileOwnerOut | ProfileGuestOut)
+@router.get(
+    "/{username}",
+    response_model=ProfileOwnerOut | ProfileGuestOut | ProfileAnonymousOut,
+)
 async def get_profile(
     username: str, db: DbSession, viewer: OptionalUser
-) -> ProfileOwnerOut | ProfileGuestOut:
+) -> ProfileOwnerOut | ProfileGuestOut | ProfileAnonymousOut:
+    """Three views, three schemas (tech-spec §4.1). Anonymous gets item
+    facts only: a logged-out owner is indistinguishable from a stranger,
+    so reservation state for anonymous viewers would hand every owner
+    their own spoilers the first time they open an incognito window."""
     user = await db.scalar(select(User).where(User.username == username.strip().lower()))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
@@ -66,7 +75,6 @@ async def get_profile(
         await db.scalars(select(Item).where(Item.user_id == user.id).order_by(Item.order_index))
     ).all()
 
-    is_owner = viewer is not None and viewer.id == user.id
     profile_fields = {
         "username": user.username,
         "display_name": user.display_name,
@@ -74,9 +82,15 @@ async def get_profile(
         "avatar_url": user.avatar_url,
     }
 
-    if is_owner:
+    if viewer is None:
+        # Reservations aren't even queried on this path
+        return ProfileAnonymousOut(
+            **profile_fields, items=[ItemAnonymousOut.model_validate(i) for i in items]
+        )
+
+    if viewer.id == user.id:
         # Owner sees view_count and NEVER any reservation data — the guest
-        # fields do not exist on ItemOwnerOut at all (tech-spec §4.1).
+        # fields do not exist on ItemOwnerOut at all.
         return ProfileOwnerOut(
             **profile_fields, items=[ItemOwnerOut.model_validate(i) for i in items]
         )
@@ -93,8 +107,7 @@ async def get_profile(
             )
         ).all()
         reserved_ids = {r.item_id for r in reservations}
-        if viewer is not None:
-            my_reserved_ids = {r.item_id for r in reservations if r.reserver_id == viewer.id}
+        my_reserved_ids = {r.item_id for r in reservations if r.reserver_id == viewer.id}
 
     return ProfileGuestOut(
         **profile_fields,

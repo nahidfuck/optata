@@ -27,7 +27,7 @@ async def lifespan(_: FastAPI):
     log.info("shutdown")
 
 
-app = FastAPI(title="Wishlist API", lifespan=lifespan)
+app = FastAPI(title="OPTATA API", lifespan=lifespan)
 
 app.state.limiter = limiter
 
@@ -47,6 +47,9 @@ app.add_middleware(
     allow_credentials=True,  # refresh token is an httpOnly cookie
     allow_headers=["*"],
     allow_methods=["*"],
+    # The client reads the RFC 6750 challenge to pick refresh-and-retry
+    # vs log-out; without this the browser hides the header cross-origin.
+    expose_headers=["WWW-Authenticate"],
 )
 
 # Added last = outermost: X-Forwarded-For from a trusted proxy is resolved

@@ -21,7 +21,7 @@ afterEach(() => {
 describe("view batching", () => {
   it("debounces multiple records into ONE deduplicated POST", async () => {
     const views = await freshViews();
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
     views.recordView("a");
@@ -36,7 +36,7 @@ describe("view batching", () => {
 
   it("visibilitychange → hidden flushes immediately with keepalive", async () => {
     const views = await freshViews();
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
     const unbind = views.bindViewFlushOnHide();
@@ -57,7 +57,7 @@ describe("view batching", () => {
 
   it("empty pending set never fires a request", async () => {
     const views = await freshViews();
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
     await views.flushViews();

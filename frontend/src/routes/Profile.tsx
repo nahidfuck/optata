@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence } from "framer-motion";
 import { useLocation, useNavigate, useParams } from "react-router";
 
 import { api } from "../api/client";
@@ -34,7 +33,8 @@ export default function Profile() {
   const toast = useToast();
 
   const [status, setStatus] = useState<Status>({ kind: "loading" });
-  const [phase, setPhase] = useState<"deck" | "grid">("grid");
+  // deck → reveal (deck lifts, grid staggers in beneath) → grid
+  const [phase, setPhase] = useState<"deck" | "reveal" | "grid">("grid");
   const [deckOrder, setDeckOrder] = useState<string[]>([]);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const cameFromDeck = useRef(false);
@@ -114,11 +114,15 @@ export default function Profile() {
   const isOwnProfile = profile?.view === "owner";
 
   // ---- actions ---------------------------------------------------------
-  const reveal = useCallback(() => setPhase("grid"), []);
+  const reveal = useCallback(
+    () => setPhase((current) => (current === "deck" ? "reveal" : current)),
+    [],
+  );
+  const deckLeft = useCallback(() => setPhase("grid"), []);
 
   const disableOwnShuffle = useCallback(() => {
     localStorage.setItem(HIDE_OWN_SHUFFLE_KEY, "1");
-    setPhase("grid");
+    setPhase((current) => (current === "deck" ? "reveal" : current));
     toast("Shuffle stays off on your own profile. Guests still get the deck.");
   }, [toast]);
 
@@ -246,7 +250,9 @@ export default function Profile() {
             <EmptyState title={`${profile.username} hasn't added anything yet`} />
           )
         ) : (
-          phase === "grid" && (
+          // mounted from the moment the deck starts lifting, so the grid
+          // staggers in BENEATH the departing deck
+          phase !== "deck" && (
             <ProfileGrid
               items={profile.items}
               canReorder={isOwnProfile}
@@ -258,19 +264,19 @@ export default function Profile() {
         )}
       </main>
 
-      <AnimatePresence>
-        {phase === "deck" && profile.items.length >= 2 && (
-          <ShuffleDeck
-            items={itemsById}
-            order={deckOrder}
-            username={profile.username}
-            isOwnProfile={isOwnProfile}
-            onReveal={reveal}
-            onOpenItem={setOpenItemId}
-            onDisableOwnShuffle={disableOwnShuffle}
-          />
-        )}
-      </AnimatePresence>
+      {phase !== "grid" && profile.items.length >= 2 && (
+        <ShuffleDeck
+          items={itemsById}
+          order={deckOrder}
+          username={profile.username}
+          isOwnProfile={isOwnProfile}
+          leaving={phase === "reveal"}
+          onReveal={reveal}
+          onLeft={deckLeft}
+          onOpenItem={setOpenItemId}
+          onDisableOwnShuffle={disableOwnShuffle}
+        />
+      )}
 
       <ItemModal
         item={openItem}

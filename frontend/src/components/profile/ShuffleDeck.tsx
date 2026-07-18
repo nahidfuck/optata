@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AnimatePresence,
-  motion,
-  useMotionValue,
-  useReducedMotion,
-  useTransform,
-} from "framer-motion";
+import { motion, useMotionValue, useReducedMotion, useTransform } from "framer-motion";
 
 import type { WishlistItem } from "../../api/types";
 import { recordView } from "../../lib/views";
@@ -16,17 +10,28 @@ import { DeckCard } from "./DeckCard";
 const FLING_VELOCITY = 400;
 const FLING_OFFSET_RATIO = 0.35;
 const DEAL_SPRING = { type: "spring", stiffness: 260, damping: 26 } as const;
+// Card lifecycle is managed by hand — AnimatePresence exits never complete
+// under React StrictMode (exited cards pile up in the DOM forever), and the
+// top-3-cards budget is a hard requirement. One flying card, removed on
+// animation completion with a timeout fallback.
+const FLY_DURATION_MS = 320;
 
-/**
- * The deck overlay. Only the top 3 cards exist in the DOM; the next two
- * images are preloaded so a dealt card is never half-loaded.
- */
+interface FlyingCard {
+  item: WishlistItem;
+  direction: 1 | -1;
+  fromX: number;
+  fromRotate: number;
+  key: string;
+}
+
 export function ShuffleDeck({
   items,
   order,
   username,
   isOwnProfile,
+  leaving,
   onReveal,
+  onLeft,
   onOpenItem,
   onDisableOwnShuffle,
 }: {
@@ -34,15 +39,19 @@ export function ShuffleDeck({
   order: readonly string[];
   username: string;
   isOwnProfile: boolean;
+  /** Profile set phase=reveal: lift away, then report onLeft. */
+  leaving: boolean;
   onReveal: () => void;
+  onLeft: () => void;
   onOpenItem: (id: string) => void;
   onDisableOwnShuffle: () => void;
 }) {
   const reducedMotion = useReducedMotion();
   const [position, setPosition] = useState(0);
-  const [exitDirection, setExitDirection] = useState(1);
+  const [flying, setFlying] = useState<FlyingCard | null>(null);
   const [dragging, setDragging] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
+  const flyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const topThree = useMemo(
     () =>
@@ -71,12 +80,30 @@ export function ShuffleDeck({
     }
   }, [position, order, items]);
 
+  const clearFlying = useCallback(() => {
+    if (flyTimer.current !== null) clearTimeout(flyTimer.current);
+    flyTimer.current = null;
+    setFlying(null);
+  }, []);
+
   const advance = useCallback(
-    (direction: 1 | -1 = 1) => {
-      setExitDirection(direction);
-      setPosition((current) => current + 1);
+    (direction: 1 | -1 = 1, fromX = 0, fromRotate = 0) => {
+      const currentId = order[position];
+      const current = currentId !== undefined ? items.get(currentId) : undefined;
+      if (current && !reducedMotion) {
+        if (flyTimer.current !== null) clearTimeout(flyTimer.current);
+        setFlying({
+          item: current,
+          direction,
+          fromX,
+          fromRotate,
+          key: `${current.id}:${position}`,
+        });
+        flyTimer.current = setTimeout(() => setFlying(null), FLY_DURATION_MS + 120);
+      }
+      setPosition((p) => p + 1);
     },
-    [],
+    [order, position, items, reducedMotion],
   );
 
   // deck exhausted → the grid takes over
@@ -86,6 +113,7 @@ export function ShuffleDeck({
 
   // desktop: arrows / space advance
   useEffect(() => {
+    if (leaving) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "ArrowRight" || event.key === " ") {
         event.preventDefault();
@@ -97,7 +125,7 @@ export function ShuffleDeck({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [advance]);
+  }, [advance, leaving]);
 
   // lock page scroll while the deck owns the screen
   useEffect(() => {
@@ -107,14 +135,34 @@ export function ShuffleDeck({
     };
   }, []);
 
+  // rAF freezes in background/occluded tabs, so onAnimationComplete may
+  // never fire — without this fallback a user who switches tabs mid-reveal
+  // comes back to a permanently stuck overlay.
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(onLeft, (reducedMotion ? 120 : 450) + 300);
+    return () => clearTimeout(timer);
+  }, [leaving, reducedMotion, onLeft]);
+
+  const idlePose = { y: "0%", scale: 1, opacity: 1 };
+  const leavingPose = reducedMotion
+    ? { ...idlePose, opacity: 0 }
+    : { y: "-115%", scale: 0.92, opacity: 1 };
+
   return (
     <motion.div
       className="fixed inset-0 z-40 flex flex-col bg-paper"
-      exit={
+      initial={false}
+      animate={leaving ? leavingPose : idlePose}
+      transition={
         reducedMotion
-          ? { opacity: 0, transition: { duration: 0.12 } }
-          : { y: "-115%", scale: 0.92, transition: { duration: 0.45, ease: [0.32, 0, 0.67, 0] } }
+          ? { duration: 0.12 }
+          : { duration: 0.45, ease: [0.32, 0, 0.67, 0] }
       }
+      onAnimationComplete={() => {
+        if (leaving) onLeft();
+      }}
+      style={{ pointerEvents: leaving ? "none" : "auto" }}
     >
       <div className="flex items-center justify-between px-4 py-3">
         <Stamp>u/{username}</Stamp>
@@ -129,15 +177,16 @@ export function ShuffleDeck({
           className="relative aspect-[3/4] w-full max-w-[min(88vw,380px)]"
           style={{ maxHeight: "72dvh" }}
         >
-          <AnimatePresence>
-            {topThree.map((item, depth) => (
+          {/* behind-cards render first, top card last (wins hit-testing) */}
+          {[...topThree].reverse().map((item) => {
+            const depth = topThree.indexOf(item);
+            return (
               <StackedCard
                 key={item.id}
                 item={item}
                 depth={depth}
-                position={position}
+                position={position + depth}
                 total={order.length}
-                exitDirection={exitDirection}
                 reducedMotion={Boolean(reducedMotion)}
                 dragging={dragging && depth === 0}
                 setDragging={setDragging}
@@ -145,8 +194,33 @@ export function ShuffleDeck({
                 onAdvance={advance}
                 onOpen={() => onOpenItem(item.id)}
               />
-            ))}
-          </AnimatePresence>
+            );
+          })}
+
+          {flying && (
+            <motion.div
+              key={flying.key}
+              aria-hidden="true"
+              className="absolute inset-0"
+              style={{ zIndex: 30, pointerEvents: "none" }}
+              initial={{ x: flying.fromX, rotate: flying.fromRotate, opacity: 1 }}
+              animate={{
+                x:
+                  flying.direction *
+                  (typeof window !== "undefined" ? window.innerWidth : 800),
+                rotate: flying.direction * 14,
+              }}
+              transition={{ duration: FLY_DURATION_MS / 1000, ease: [0.3, 0.05, 0.6, 1] }}
+              onAnimationComplete={clearFlying}
+            >
+              <DeckCard
+                item={flying.item}
+                position={position - 1}
+                total={order.length}
+                dragging={false}
+              />
+            </motion.div>
+          )}
         </div>
       </div>
 
@@ -173,7 +247,6 @@ function StackedCard({
   depth,
   position,
   total,
-  exitDirection,
   reducedMotion,
   dragging,
   setDragging,
@@ -185,12 +258,11 @@ function StackedCard({
   depth: number;
   position: number;
   total: number;
-  exitDirection: number;
   reducedMotion: boolean;
   dragging: boolean;
   setDragging: (value: boolean) => void;
   frameRef: React.RefObject<HTMLDivElement | null>;
-  onAdvance: (direction: 1 | -1) => void;
+  onAdvance: (direction: 1 | -1, fromX?: number, fromRotate?: number) => void;
   onOpen: () => void;
 }) {
   const x = useMotionValue(0);
@@ -198,9 +270,10 @@ function StackedCard({
   const rotate = useTransform(x, [-320, 0, 320], [-12, 0, 12], { clamp: true });
   const isTop = depth === 0;
 
-  const restingTransforms = reducedMotion
-    ? {}
+  const pose = reducedMotion
+    ? { opacity: 1 }
     : {
+        opacity: 1,
         scale: 1 - depth * 0.045,
         y: depth * 12,
         rotate: depth === 0 ? 0 : depth === 1 ? -1.6 : 1.4,
@@ -221,23 +294,10 @@ function StackedCard({
           ? { opacity: 0 }
           : isTop
             ? { y: 44, scale: 0.94, rotate: -2, opacity: 0 }
-            : { opacity: 0, ...restingTransforms }
+            : { opacity: 0, scale: 1 - depth * 0.045, y: depth * 12 + 10 }
       }
-      animate={
-        reducedMotion
-          ? { opacity: 1, transition: { duration: 0.12 } }
-          : { opacity: 1, ...(!isTop ? restingTransforms : { y: 0, scale: 1, rotate: 0 }), transition: DEAL_SPRING }
-      }
-      exit={
-        reducedMotion
-          ? { opacity: 0, transition: { duration: 0.12 } }
-          : {
-              x: exitDirection * (typeof window !== "undefined" ? window.innerWidth : 800),
-              rotate: exitDirection * 14,
-              opacity: 1,
-              transition: { duration: 0.32, ease: [0.3, 0.05, 0.6, 1] },
-            }
-      }
+      animate={pose}
+      transition={reducedMotion ? { duration: 0.12 } : DEAL_SPRING}
       drag={isTop && !reducedMotion ? "x" : false}
       dragElastic={0.9}
       dragMomentum={false}
@@ -249,7 +309,9 @@ function StackedCard({
           Math.abs(info.velocity.x) > FLING_VELOCITY ||
           Math.abs(info.offset.x) > width * FLING_OFFSET_RATIO;
         if (flung) {
-          onAdvance(info.offset.x >= 0 || info.velocity.x > 0 ? 1 : -1);
+          const direction: 1 | -1 = info.offset.x >= 0 || info.velocity.x > 0 ? 1 : -1;
+          onAdvance(direction, x.get(), rotate.get());
+          x.set(0); // the live card becomes the flying ghost; reset the stack slot
         }
       }}
     >

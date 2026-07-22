@@ -10,11 +10,18 @@ import { DeckCard } from "./DeckCard";
 const FLING_VELOCITY = 400;
 const FLING_OFFSET_RATIO = 0.35;
 const DEAL_SPRING = { type: "spring", stiffness: 260, damping: 26 } as const;
-// Card lifecycle is managed by hand — AnimatePresence exits never complete
-// under React StrictMode (exited cards pile up in the DOM forever), and the
-// top-3-cards budget is a hard requirement. One flying card, removed on
-// animation completion with a timeout fallback.
-const FLY_DURATION_MS = 320;
+export const REVEAL_DURATION_MS = 450;
+// Card lifecycle is managed by hand (no AnimatePresence): position state is
+// the single source of truth and the DOM is derived from it — at most one
+// transient flying card, so there is never a queue of exits to replay.
+export const FLY_DURATION_MS = 320;
+// Completion is STATE-DRIVEN: the animation-complete event is the primary
+// path. The safety net only exists for tabs that cannot animate at all
+// (hidden/occluded → rAF frozen) and reconciles in one step; the absolute
+// failsafe is an order of magnitude beyond any legitimately slow animation,
+// so it can never fire mid-flight on slow hardware (contract pinned in
+// ShuffleDeck.test.tsx).
+export const ANIMATION_FAILSAFE_MS = 5000;
 
 interface FlyingCard {
   item: WishlistItem;
@@ -34,6 +41,7 @@ export function ShuffleDeck({
   onLeft,
   onOpenItem,
   onDisableOwnShuffle,
+  forceReducedMotion = false,
 }: {
   items: ReadonlyMap<string, WishlistItem>;
   order: readonly string[];
@@ -45,13 +53,16 @@ export function ShuffleDeck({
   onLeft: () => void;
   onOpenItem: (id: string) => void;
   onDisableOwnShuffle: () => void;
+  /** Force the reduced-motion path regardless of the OS media query —
+   * used by tests; a future settings toggle can feed it too. */
+  forceReducedMotion?: boolean;
 }) {
-  const reducedMotion = useReducedMotion();
+  const osReducedMotion = useReducedMotion();
+  const reducedMotion = forceReducedMotion || Boolean(osReducedMotion);
   const [position, setPosition] = useState(0);
   const [flying, setFlying] = useState<FlyingCard | null>(null);
   const [dragging, setDragging] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
-  const flyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const topThree = useMemo(
     () =>
@@ -80,18 +91,17 @@ export function ShuffleDeck({
     }
   }, [position, order, items]);
 
-  const clearFlying = useCallback(() => {
-    if (flyTimer.current !== null) clearTimeout(flyTimer.current);
-    flyTimer.current = null;
-    setFlying(null);
-  }, []);
+  const clearFlying = useCallback(() => setFlying(null), []);
 
   const advance = useCallback(
     (direction: 1 | -1 = 1, fromX = 0, fromRotate = 0) => {
       const currentId = order[position];
       const current = currentId !== undefined ? items.get(currentId) : undefined;
-      if (current && !reducedMotion) {
-        if (flyTimer.current !== null) clearTimeout(flyTimer.current);
+      // No fling ghost under reduced motion, and none when the tab cannot
+      // animate anyway — advancing is always instant state, never gated on
+      // an animation.
+      const canAnimate = !reducedMotion && document.visibilityState !== "hidden";
+      if (current && canAnimate) {
         setFlying({
           item: current,
           direction,
@@ -99,12 +109,28 @@ export function ShuffleDeck({
           fromRotate,
           key: `${current.id}:${position}`,
         });
-        flyTimer.current = setTimeout(() => setFlying(null), FLY_DURATION_MS + 120);
       }
       setPosition((p) => p + 1);
     },
     [order, position, items, reducedMotion],
   );
+
+  // Flying-card safety net, gated on visibility: if the tab goes hidden
+  // mid-flight (rAF freezes, animation-complete never fires), reconcile to
+  // the final state in one step. The failsafe cannot beat a real animation.
+  useEffect(() => {
+    if (flying === null) return;
+    const reconcileIfFrozen = () => {
+      if (document.visibilityState === "hidden") clearFlying();
+    };
+    reconcileIfFrozen();
+    document.addEventListener("visibilitychange", reconcileIfFrozen);
+    const failsafe = setTimeout(clearFlying, ANIMATION_FAILSAFE_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", reconcileIfFrozen);
+      clearTimeout(failsafe);
+    };
+  }, [flying, clearFlying]);
 
   // deck exhausted → the grid takes over
   useEffect(() => {
@@ -135,14 +161,24 @@ export function ShuffleDeck({
     };
   }, []);
 
-  // rAF freezes in background/occluded tabs, so onAnimationComplete may
-  // never fire — without this fallback a user who switches tabs mid-reveal
-  // comes back to a permanently stuck overlay.
+  // Reveal completion is state-driven: onAnimationComplete is the primary
+  // path. rAF freezes in hidden/occluded tabs, so a user who switches tabs
+  // mid-reveal would otherwise come back to a stuck overlay — going hidden
+  // reconciles immediately, and the failsafe can never outrun a real
+  // animation on slow hardware.
   useEffect(() => {
     if (!leaving) return;
-    const timer = setTimeout(onLeft, (reducedMotion ? 120 : 450) + 300);
-    return () => clearTimeout(timer);
-  }, [leaving, reducedMotion, onLeft]);
+    const reconcileIfFrozen = () => {
+      if (document.visibilityState === "hidden") onLeft();
+    };
+    reconcileIfFrozen();
+    document.addEventListener("visibilitychange", reconcileIfFrozen);
+    const failsafe = setTimeout(onLeft, ANIMATION_FAILSAFE_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", reconcileIfFrozen);
+      clearTimeout(failsafe);
+    };
+  }, [leaving, onLeft]);
 
   const idlePose = { y: "0%", scale: 1, opacity: 1 };
   const leavingPose = reducedMotion
@@ -157,7 +193,7 @@ export function ShuffleDeck({
       transition={
         reducedMotion
           ? { duration: 0.12 }
-          : { duration: 0.45, ease: [0.32, 0, 0.67, 0] }
+          : { duration: REVEAL_DURATION_MS / 1000, ease: [0.32, 0, 0.67, 0] }
       }
       onAnimationComplete={() => {
         if (leaving) onLeft();
@@ -213,11 +249,13 @@ export function ShuffleDeck({
               transition={{ duration: FLY_DURATION_MS / 1000, ease: [0.3, 0.05, 0.6, 1] }}
               onAnimationComplete={clearFlying}
             >
+              {/* flat shadow while airborne: a rotating offset shadow pokes
+                  slivers past the deck edge and reads as an artifact */}
               <DeckCard
                 item={flying.item}
                 position={position - 1}
                 total={order.length}
-                dragging={false}
+                dragging={true}
               />
             </motion.div>
           )}

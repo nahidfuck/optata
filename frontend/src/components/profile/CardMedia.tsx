@@ -2,12 +2,14 @@ import { useState } from "react";
 
 import type { WishlistItem } from "../../api/types";
 import { cn } from "../../lib/cn";
+import { muteAccent } from "../../lib/color";
 import { Stamp } from "../ui/Stamp";
 
 /**
- * The photo inside a tag. The accent color IS the card surface while the
- * photo decodes, so a card is never empty; a failed photo leaves a clean
- * accent tag with title/price — never a broken-image icon.
+ * The photo inside a tag — and the photo is the HERO. It fills the frame
+ * (cover in the deck, natural ratio in the grid); the muted accent appears
+ * only as the 2px frame, and as the body fill while the photo is loading
+ * or when it failed — a card is never empty and never a broken-image icon.
  *
  * Reservation state renders ONLY for the guest view — the union type makes
  * reading it on any other payload a compile error.
@@ -18,22 +20,23 @@ export function CardMedia({
   className,
 }: {
   item: WishlistItem;
-  /** "contain" = fixed 3:4 deck frame; "natural" = grid keeps photo ratio */
-  fit: "contain" | "natural";
+  /** "cover" = fixed deck frame, photo fills it; "natural" = grid keeps the photo's ratio */
+  fit: "cover" | "natural";
   className?: string;
 }) {
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const reserved = item.view === "guest" && item.is_reserved;
+  const muted = muteAccent(item.accent_color);
 
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-[10px] border-2 border-ink",
-        fit === "contain" ? "h-full w-full" : "w-full",
+        "relative overflow-hidden rounded-[10px] border-2",
+        fit === "cover" ? "h-full w-full" : "w-full",
         fit === "natural" && state !== "ready" ? "aspect-[3/4]" : "",
         className,
       )}
-      style={{ backgroundColor: item.accent_color }}
+      style={{ borderColor: muted, backgroundColor: muted }}
     >
       {state !== "failed" && (
         <img
@@ -44,8 +47,8 @@ export function CardMedia({
           onError={() => setState("failed")}
           className={cn(
             "transition-opacity duration-150 motion-reduce:transition-none",
-            fit === "contain"
-              ? "absolute inset-0 h-full w-full object-contain"
+            fit === "cover"
+              ? "absolute inset-0 h-full w-full object-cover"
               : "block h-auto w-full",
             state === "ready" ? "opacity-100" : "opacity-0",
           )}

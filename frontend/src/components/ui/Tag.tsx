@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useId } from "react";
 import type { ComponentPropsWithRef } from "react";
 
 import { cn } from "../../lib/cn";
@@ -6,61 +6,46 @@ import { cn } from "../../lib/cn";
 /**
  * The signature surface — a price tag, not a card.
  *
- * Three things make it read as a tag (and all three live in one SVG
- * silhouette, because CSS can't give a clipped corner a border AND an
- * offset shadow at once):
- *  1. an angled top-left corner — the silhouette break;
- *  2. a punched hole in a grommet zone, separated by a hairline rule —
- *     a REAL hole: you see whatever is behind the tag through it,
- *     including the next card in a deck;
- *  3. the offset ink shadow is the same silhouette, holes and all.
+ * Rendered ENTIRELY declaratively, with zero measured dimensions: the SVG
+ * has no viewBox and sizes to the container via CSS width/height 100%, so
+ * one SVG unit = one rendered pixel. Fixed features (corner radius, angled
+ * cut, grommet band, hole) are authored in fixed units and stay crisp at
+ * every scale; the variable edges use percentage geometry (`width="100%"`,
+ * `cx="50%"`), which SVG resolves against the rendered box. Nothing here
+ * waits on JavaScript, so the tag is fully correct on the first paint —
+ * grommet band, hole, stroke and silhouette all present before any photo,
+ * layout or measurement arrives.
  *
- * Geometry is fixed-size (cut, radius, hole) so the shape survives every
- * scale from a 200px grid thumbnail to a full-screen deck card.
+ * The three things that make it read as a tag:
+ *  1. an angled top-left corner — the silhouette break;
+ *  2. a real see-through punched hole in the grommet band;
+ *  3. the offset ink shadow is the same silhouette (a drop-shadow filter,
+ *     so it follows the cut and the hole automatically).
  */
 
 const CUT = 22;
 const RADIUS = 18;
-const HOLE_CY = 19;
-const HOLE_R = 6;
 const GROMMET_H = 38;
-
-function silhouettePath(w: number, h: number, cut: boolean): string {
-  const r = RADIUS;
-  const c = cut ? CUT : 0;
-  const start = c > 0 ? `M ${c} 0` : `M ${r} 0`;
-  const closing =
-    c > 0
-      ? `V ${c} Z` // straight diagonal from (0, c) up to (c, 0)
-      : `V ${r} A ${r} ${r} 0 0 1 ${r} 0 Z`;
-  return [
-    start,
-    `H ${w - r}`,
-    `A ${r} ${r} 0 0 1 ${w} ${r}`,
-    `V ${h - r}`,
-    `A ${r} ${r} 0 0 1 ${w - r} ${h}`,
-    `H ${r}`,
-    `A ${r} ${r} 0 0 1 0 ${h - r}`,
-    closing,
-  ].join(" ");
-}
-
-function holePath(cx: number): string {
-  const r = HOLE_R;
-  return `M ${cx - r} ${HOLE_CY} a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 ${-r * 2} 0 Z`;
-}
+const HOLE_CY = GROMMET_H / 2; // dead-centre of the grommet band
+const HOLE_R = 5; // delicate grommet, not a hammered hole
+const HOLE_RING_W = 1.25;
+// diagonal overlaps the two straight edges it meets, so the cut corner
+// reads as one continuous stroke with no notch at the joins
+const DIAG_OVERLAP = 1.1;
 
 interface TagProps extends ComponentPropsWithRef<"div"> {
-  /** Punched hole + grommet zone. Default on — it IS the brand. */
+  /** Punched hole + grommet band. Default on — it IS the brand. */
   hole?: boolean;
   /** Angled top-left corner. Default on. */
   cut?: boolean;
-  /** Surface fill — deck/grid cards pass the item's accent color. */
+  /** Surface fill (defaults to paper — the accent is trim, not fill). */
   surface?: string;
   /** Raised state (hover/drag settle): 8px offset instead of 5px. */
   lift?: boolean;
   /** Shadow hidden entirely — used DURING drag gestures for 60fps. */
   flat?: boolean;
+  /** Fill for the grommet band (deck/grid cards pass the muted accent). */
+  grommetFill?: string;
 }
 
 export function Tag({
@@ -69,81 +54,103 @@ export function Tag({
   surface,
   lift = false,
   flat = false,
+  grommetFill,
   className,
   children,
   ...rest
 }: TagProps) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const rect = el.getBoundingClientRect();
-      setDims((prev) =>
-        prev && Math.abs(prev.w - rect.width) < 0.5 && Math.abs(prev.h - rect.height) < 0.5
-          ? prev
-          : { w: rect.width, h: rect.height },
-      );
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  const d = dims
-    ? silhouettePath(dims.w, dims.h, cut) + (hole ? " " + holePath(dims.w / 2) : "")
-    : null;
+  // Unique per instance so ~40 grid cards don't collide on one mask id.
+  // useId is first-paint stable and needs no measurement.
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const fillMaskId = `tag-fill-${uid}`;
+  const strokeMaskId = `tag-stroke-${uid}`;
   const offset = lift ? 8 : 5;
 
+  const cutTriangle = cut ? <polygon points={`0,0 ${CUT},0 0,${CUT}`} fill="black" /> : null;
+
   return (
-    <div ref={ref} className={cn("relative", className)} {...rest}>
-      {d && dims && (
-        <svg
-          aria-hidden="true"
-          className="absolute inset-0 z-0 h-full w-full overflow-visible"
-        >
-          {/* the shadow is the same silhouette — flattened during gestures
-              via opacity (compositor-only), never by cutting motion */}
-          <g
-            className="transition-[opacity,transform] duration-150 motion-reduce:transition-none"
-            style={{ transform: `translate(${offset}px, ${offset}px)`, opacity: flat ? 0 : 1 }}
-          >
-            <path d={d} fillRule="evenodd" className="fill-ink" />
-          </g>
-          <path
-            d={d}
-            fillRule="evenodd"
-            strokeWidth={2}
-            className="stroke-ink"
+    <div className={cn("relative", className)} {...rest}>
+      <svg
+        aria-hidden="true"
+        className="absolute inset-0 z-0 h-full w-full overflow-visible"
+        // the offset shadow is a filter, so it follows the true silhouette
+        // (cut + hole). Dropped entirely during gestures for 60fps.
+        style={{
+          filter: flat ? "none" : `drop-shadow(${offset}px ${offset}px 0 var(--color-ink))`,
+        }}
+      >
+        <defs>
+          {/* fills clipped to the silhouette: rounded rect − cut − hole */}
+          <mask id={fillMaskId}>
+            <rect width="100%" height="100%" rx={RADIUS} ry={RADIUS} fill="white" />
+            {cutTriangle}
+            {hole && <circle cx="50%" cy={HOLE_CY} r={HOLE_R} fill="black" />}
+          </mask>
+          {/* stroke keeps its full 2px width on the edge: full rect − cut,
+              no rounding subtracted (the stroke rect carries its own rx) */}
+          <mask id={strokeMaskId}>
+            <rect width="100%" height="100%" fill="white" />
+            {cutTriangle}
+          </mask>
+        </defs>
+
+        {/* surface + grommet band + hairline, all shaped by the fill mask */}
+        <g mask={`url(#${fillMaskId})`}>
+          <rect
+            width="100%"
+            height="100%"
             style={{ fill: surface ?? "var(--color-paper)" }}
           />
+          {grommetFill && <rect width="100%" height={GROMMET_H} fill={grommetFill} />}
           {hole && (
-            <>
-              {/* grommet: reinforcement ring + hairline rule — the material
-                  visibly supports the hole, a string would go through it */}
-              <circle
-                cx={dims.w / 2}
-                cy={HOLE_CY}
-                r={HOLE_R + 4}
-                fill="none"
-                strokeWidth={1}
-                className="stroke-ink opacity-30"
-              />
-              <line
-                x1={0}
-                y1={GROMMET_H}
-                x2={dims.w}
-                y2={GROMMET_H}
-                strokeWidth={1}
-                className="stroke-ink opacity-30"
-              />
-            </>
+            <line
+              x1="0"
+              y1={GROMMET_H}
+              x2="100%"
+              y2={GROMMET_H}
+              strokeWidth={1}
+              className="stroke-ink opacity-25"
+            />
           )}
-        </svg>
-      )}
+        </g>
+
+        {/* 2px silhouette outline: rounded-rect stroke minus the cut corner… */}
+        <g mask={`url(#${strokeMaskId})`}>
+          <rect
+            width="100%"
+            height="100%"
+            rx={RADIUS}
+            ry={RADIUS}
+            fill="none"
+            strokeWidth={2}
+            className="stroke-ink"
+          />
+        </g>
+        {/* …plus the diagonal that closes the cut (overlapped so it joins clean) */}
+        {cut && (
+          <line
+            x1={-DIAG_OVERLAP}
+            y1={CUT + DIAG_OVERLAP}
+            x2={CUT + DIAG_OVERLAP}
+            y2={-DIAG_OVERLAP}
+            strokeWidth={2}
+            className="stroke-ink"
+          />
+        )}
+
+        {/* delicate grommet ring around the see-through hole */}
+        {hole && (
+          <circle
+            cx="50%"
+            cy={HOLE_CY}
+            r={HOLE_R}
+            fill="none"
+            strokeWidth={HOLE_RING_W}
+            className="stroke-ink opacity-70"
+          />
+        )}
+      </svg>
+
       <div className={cn("relative z-10", hole && "pt-[38px]")}>{children}</div>
     </div>
   );

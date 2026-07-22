@@ -113,20 +113,59 @@ describe("ShuffleDeck", () => {
     ).toBeDefined();
   });
 
-  it("reveal completes even when rAF never ticks (background tab)", async () => {
-    // jsdom runs no animation frames — exactly like an occluded/background
-    // tab, where framer's onAnimationComplete never fires. The timeout
-    // fallback must still hand control to the grid.
-    vi.useFakeTimers();
+  it("a HIDDEN tab reconciles the reveal immediately, in one step", async () => {
+    // Background/occluded tabs freeze rAF, so animation-complete never
+    // fires. Going hidden must hand control to the grid at once — never a
+    // timer racing a real animation.
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
     try {
       const onLeft = vi.fn();
       renderDeck(4, { leaving: true, onLeft });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(900);
-      });
+      await act(async () => {});
       expect(onLeft).toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
     }
+  });
+
+  it("the absolute failsafe can never beat a real animation on slow hardware", async () => {
+    const { ANIMATION_FAILSAFE_MS, FLY_DURATION_MS, REVEAL_DURATION_MS } = await import(
+      "./ShuffleDeck"
+    );
+    const longestAnimation = Math.max(FLY_DURATION_MS, REVEAL_DURATION_MS);
+    expect(ANIMATION_FAILSAFE_MS).toBeGreaterThanOrEqual(longestAnimation * 10);
+  });
+
+  it("REDUCED MOTION: deal, advance through every card and reveal work on fades alone", async () => {
+    // No dependency on any spring or fling completing: advancing is pure
+    // state, no flying ghost is ever created, and the deck hands over to
+    // the grid at the end. (The OS media-query wiring itself is framer's
+    // useReducedMotion; the prop drives the same branch.)
+    const items = makeItems(4);
+    const onReveal = vi.fn();
+    const { container } = render(
+      <ShuffleDeck
+        items={items}
+        order={[...items.keys()]}
+        username="demo"
+        isOwnProfile={false}
+        leaving={false}
+        forceReducedMotion
+        onReveal={onReveal}
+        onLeft={vi.fn()}
+        onOpenItem={vi.fn()}
+        onDisableOwnShuffle={vi.fn()}
+      />,
+    );
+
+    for (let step = 1; step <= 4; step++) {
+      expect(screen.getByText(`No. ${String(step).padStart(2, "0")}/04`)).toBeDefined();
+      await act(async () => {
+        fireEvent.keyDown(window, { key: " " });
+      });
+      // no flying ghost exists under reduced motion — nothing to wait for
+      expect(container.querySelector('div[aria-hidden="true"] [aria-label="Next card"]')).toBeNull();
+    }
+    expect(onReveal).toHaveBeenCalledTimes(1);
   });
 });

@@ -257,7 +257,7 @@ async def forgot_password(
             )
         )
         await db.commit()
-        reset_url = f"{get_settings().frontend_origin}/reset-password?token={raw}"
+        reset_url = f"{get_settings().primary_frontend_origin}/reset-password?token={raw}"
         background_tasks.add_task(send_password_reset_email, user.email, reset_url)
     return {"detail": "If that email is registered, a reset link is on its way."}
 

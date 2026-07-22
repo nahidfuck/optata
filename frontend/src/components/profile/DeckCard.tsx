@@ -1,13 +1,14 @@
 import { formatPrice } from "../../api/types";
 import type { WishlistItem } from "../../api/types";
+import { muteAccent } from "../../lib/color";
 import { Stamp } from "../ui/Stamp";
 import { Tag } from "../ui/Tag";
 import { CardMedia } from "./CardMedia";
 
 /**
- * One dealt tag. Fixed 3:4 portrait; the photo is object-fit: contain and
- * the letterbox is the item's accent color — the same photo works here and
- * in the grid.
+ * One dealt tag. Fixed 3:4 portrait; the photo is the hero — object-fit
+ * cover, filling the frame. The MUTED accent is trim only: the grommet
+ * strip and the 2px inner frame (plus the body fill while loading/failed).
  *
  * Interaction split: the PHOTO advances the deck (click/tap), the INFO
  * STRIP (the tag's written body) opens details. Swipe always advances.
@@ -28,9 +29,11 @@ export function DeckCard({
   onOpen?: () => void;
 }) {
   return (
-    <Tag surface={item.accent_color} flat={dragging} className="h-full w-full select-none">
-      {/* stamped serial in the grommet zone */}
-      <div className="pointer-events-none absolute left-4 right-4 top-0 z-20 flex h-[38px] items-center justify-between">
+    <Tag grommetFill={muteAccent(item.accent_color)} flat={dragging} className="h-full w-full select-none">
+      {/* Stamped serial in the grommet zone. Insets clear the silhouette's
+          top corners — 24px left for the 22px cut, 22px right for the 18px
+          top-right radius — so the text never rides under a clipped edge. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-[38px] items-center justify-between pl-6 pr-[22px]">
         <Stamp className="text-[11px] opacity-70">Optata</Stamp>
         <Stamp className="text-[11px]">
           No. {String(position + 1).padStart(2, "0")}/{String(total).padStart(2, "0")}
@@ -45,7 +48,7 @@ export function DeckCard({
           onClick={onAdvance}
           className="min-h-0 flex-1 cursor-pointer"
         >
-          <CardMedia item={item} fit="contain" />
+          <CardMedia item={item} fit="cover" />
         </button>
 
         <button

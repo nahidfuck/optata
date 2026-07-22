@@ -15,6 +15,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { formatPrice } from "../../api/types";
 import type { WishlistItem } from "../../api/types";
 import { cn } from "../../lib/cn";
+import { muteAccent } from "../../lib/color";
 import { Stamp } from "../ui/Stamp";
 import { Tag } from "../ui/Tag";
 import { CardMedia } from "./CardMedia";
@@ -146,7 +147,10 @@ function GridCard({
         dimmed && "opacity-40",
         isOver && !dimmed && "translate-y-1",
       )}
-      style={{ contentVisibility: index > 11 ? "auto" : undefined }}
+      // No content-visibility: inside a CSS multi-column container it
+      // collapses off-screen cards to zero height, piling them into the
+      // last column and starving the tag's size measurement. ≤40 cards —
+      // there is nothing to virtualize.
       {...(sortable ? { ...attributes, ...listeners } : {})}
     >
       <button type="button" onClick={onOpen} className="block w-full text-left" aria-label={`Details: ${item.title}`}>
@@ -159,7 +163,7 @@ function GridCard({
 function GridCardBody({ item, lifted = false }: { item: WishlistItem; lifted?: boolean }) {
   const price = formatPrice(item.price, item.currency);
   return (
-    <Tag surface={item.accent_color} lift={lifted} className="w-full">
+    <Tag grommetFill={muteAccent(item.accent_color)} lift={lifted} className="w-full">
       <div className="px-2.5 pb-3">
         <CardMedia item={item} fit="natural" />
         <h3 className="mt-2.5 line-clamp-2 px-1 font-display text-base font-semibold leading-snug">
